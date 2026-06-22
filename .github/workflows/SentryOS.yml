@@ -1,7 +1,7 @@
 name: Build SentryOS (Cubic Style - Base Debian)
 
 on:
-  workflow_dispatch: # Jalankan manual lewat tombol
+  workflow_dispatch:
 
 jobs:
   build-iso:
@@ -25,7 +25,7 @@ jobs:
           sudo xorriso -osirrox on -indev debian-base.iso -extract / /tmp/iso_unpacked
           sudo unsquashfs -f -d /tmp/sentryos-root /tmp/iso_unpacked/live/filesystem.squashfs
 
-      - name: Masuk Chroot & Pasang SentryOS (Sistem Anti-Root & Auto-Login)
+      - name: Masuk Chroot & Pasang SentryOS (Anti-Root & Bersih-bersih)
         run: |
           sudo mount -t proc none /tmp/sentryos-root/proc
           sudo mount -t sysfs none /tmp/sentryos-root/sys
@@ -34,16 +34,13 @@ jobs:
           sudo cp /etc/resolv.conf /tmp/sentryos-root/etc/
 
           sudo chroot /tmp/sentryos-root /bin/bash -c "
-            # 1. Kunci Hostname jadi sentryos (Anti Bocor)
             echo 'sentryos' > /etc/hostname
             echo '127.0.0.1 localhost sentryos' > /etc/hosts
             
-            # 2. Bersihin identitas mesin GitHub
             rm -f /etc/machine-id
             rm -f /var/lib/dbus/machine-id
             dbus-uuidgen --ensure=/etc/machine-id
             
-            # 3. Ganti identitas OS Debian
             cat <<EOF > /etc/os-release
             PRETTY_NAME=\"SentryOS\"
             NAME=\"SentryOS\"
@@ -51,11 +48,12 @@ jobs:
             ID_LIKE=debian
           EOF
 
-            # 4. EKSEKUSI ANTI-ROOT (Kunci Root & Hapus Sudo)
+            # --- EKSEKUSI ANTI-ROOT (FIX BUG N但OLAK HAPUS SUDO) ---
             passwd -l root
+            export SUDO_FORCE_REMOVE=yes
             apt-get remove --purge sudo -y
+            # -------------------------------------------------------
             
-            # 5. PAKSA AUTO-LOGIN TANPA SUDO
             mkdir -p /etc/lightdm/lightdm.conf.d
             cat <<EOF > /etc/lightdm/lightdm.conf.d/99-autologin.conf
             [Seat:*]
@@ -64,8 +62,6 @@ jobs:
             user-session=xfce
           EOF
 
-            # 6. BIKIN ATURAN POLKIT (Bypass APT & Installer)
-            # Karena gak ada sudo, ini nyawa biar lu tetep bisa install aplikasi & install OS ke PC
             mkdir -p /usr/share/polkit-1/rules.d/
             cat <<EOF > /usr/share/polkit-1/rules.d/45-sentryos-bypass.rules
             polkit.addRule(function(action, subject) {
@@ -76,16 +72,23 @@ jobs:
             });
           EOF
 
-            # 7. Install Calamares Installer
             apt-get update
             apt-get install -y calamares calamares-settings-debian --no-install-recommends
+
+            # --- FASE DIET (BERSIH-BERSIH SAMPAH) ---
+            apt-get clean
+            apt-get autoremove -y
+            rm -rf /var/lib/apt/lists/*
+            rm -rf /tmp/*
+            rm -rf /var/tmp/*
+            rm -rf /var/log/*
+            # ----------------------------------------
           "
 
       - name: Pasang Logo SentryOS & Branding Custom
         run: |
           sudo curl -L -o /tmp/sentryos-root/tmp/logo.png "https://drive.google.com/uc?export=download&id=1QJ__X3bZmA5j7VQX17rit_EV1eQNAkKY"
           
-          # EKSEKUSI CHAFA DI LUAR CHROOT BIAR GAK ERROR
           chafa --format=symbols --size=40x /tmp/sentryos-root/tmp/logo.png | sudo tee /tmp/sentryos-root/etc/distro-logo.txt > /dev/null
           
           sudo mkdir -p /tmp/sentryos-root/usr/share/calamares/branding/sentryos
@@ -114,6 +117,9 @@ jobs:
           EOF'
           
           sudo sed -i 's/branding: .*/branding: sentryos/g' /tmp/sentryos-root/etc/calamares/settings.conf || true
+          
+          # Hapus file logo asli biar gak menuh-menuhin sistem
+          sudo rm -f /tmp/sentryos-root/tmp/logo.png
 
       - name: Bersih-bersih & Unmount
         run: |
@@ -123,10 +129,12 @@ jobs:
           sudo umount /tmp/sentryos-root/sys
           sudo umount /tmp/sentryos-root/proc
 
-      - name: Bungkus Ulang OS (Fase Build Cubic)
+      - name: Bungkus Ulang OS (Fase Kompresi Super Ketat)
         run: |
           sudo rm /tmp/iso_unpacked/live/filesystem.squashfs
-          sudo mksquashfs /tmp/sentryos-root /tmp/iso_unpacked/live/filesystem.squashfs -comp xz
+          
+          # Pake flag -b 1M biar algoritma XZ neken file jauh lebih padat
+          sudo mksquashfs /tmp/sentryos-root /tmp/iso_unpacked/live/filesystem.squashfs -comp xz -b 1M -noappend
 
           cd /tmp/iso_unpacked
           sudo bash -c "md5sum \$(find ! -name 'md5sum.txt' ! -path './isolinux/*' -follow -type f) > md5sum.txt"
