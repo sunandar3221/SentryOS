@@ -84,7 +84,9 @@ jobs:
       - name: Pasang Logo SentryOS & Branding Custom
         run: |
           sudo curl -L -o /tmp/sentryos-root/tmp/logo.png "https://drive.google.com/uc?export=download&id=1QJ__X3bZmA5j7VQX17rit_EV1eQNAkKY"
-          sudo chroot /tmp/sentryos-root /bin/bash -c "chafa --format=symbols --size=40x /tmp/logo.png > /etc/distro-logo.txt"
+          
+          # EKSEKUSI CHAFA DI LUAR CHROOT BIAR GAK ERROR
+          chafa --format=symbols --size=40x /tmp/sentryos-root/tmp/logo.png | sudo tee /tmp/sentryos-root/etc/distro-logo.txt > /dev/null
           
           sudo mkdir -p /tmp/sentryos-root/usr/share/calamares/branding/sentryos
           sudo cp /tmp/sentryos-root/tmp/logo.png /tmp/sentryos-root/usr/share/calamares/branding/sentryos/logo.png
