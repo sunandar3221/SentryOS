@@ -64,8 +64,8 @@ jobs:
           # Download gambar lu dari GDrive pake URL Direct Download
           sudo curl -L -o /tmp/sentryos-root/tmp/logo.png "https://drive.google.com/uc?export=download&id=1QJ__X3bZmA5j7VQX17rit_EV1eQNAkKY"
           
-          # Bikin ASCII buat terminal pakai logo lu
-          sudo chroot /tmp/sentryos-root chafa --format=symbols --size=40x /tmp/logo.png > /tmp/sentryos-root/etc/distro-logo.txt
+          # Bikin ASCII buat terminal pakai logo lu (Fixed Permission Denied bug pake sudo tee)
+          sudo chroot /tmp/sentryos-root chafa --format=symbols --size=40x /tmp/logo.png | sudo tee /tmp/sentryos-root/etc/distro-logo.txt > /dev/null
           
           # Bikin konfigurasi branding Calamares khusus SentryOS
           sudo mkdir -p /tmp/sentryos-root/usr/share/calamares/branding/sentryos
