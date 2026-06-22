@@ -53,11 +53,11 @@ jobs:
           ID_LIKE=debian
           EOF'
 
-      - name: Pasang GUI XFCE & Calamares Installer
+      - name: Pasang Kernel, GUI XFCE & Calamares Installer
         run: |
           sudo chroot /tmp/sentryos-root apt-get update
-          # Memasang desktop XFCE dan Calamares
-          sudo chroot /tmp/sentryos-root apt-get install -y xorg xfce4 lightdm calamares calamares-settings-debian live-boot --no-install-recommends
+          # Memasang Kernel Linux, systemd, desktop XFCE, dan Calamares
+          sudo chroot /tmp/sentryos-root apt-get install -y linux-image-amd64 systemd-sysv xorg xfce4 lightdm calamares calamares-settings-debian live-boot --no-install-recommends
 
       - name: Pasang Logo SentryOS & Custom Installer Calamares
         run: |
