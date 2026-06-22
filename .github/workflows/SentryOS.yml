@@ -1,73 +1,91 @@
-name: Build SentryOS (Debian 13 Trixie Custom)
+name: Build SentryOS (Cubic Style - Base Debian)
 
 on:
-  workflow_dispatch: # Jalankan manual lewat tombol di web GitHub
+  workflow_dispatch: # Jalankan manual lewat tombol
 
 jobs:
   build-iso:
-    runs-on: ubuntu-latest # Menggunakan server superkomputer GitHub
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Install Tools Pendukung Di Server GitHub
+      - name: Install Tools Pendukung (Sistem Cubic CLI)
         run: |
           sudo apt update
-          sudo apt install -y debootstrap squashfs-tools xorriso live-build chafa curl isolinux syslinux-common
+          sudo apt install -y squashfs-tools xorriso chafa curl isolinux syslinux-common wget dbus
 
-      - name: Ambil Base Debian 13 (Bootstrap)
+      - name: Download ISO Debian Asli (Base OS Trixie XFCE)
         run: |
-          sudo mkdir -p /tmp/sentryos-root
-          # Menarik sistem inti Debian 13 (Trixie) kosongan
-          sudo debootstrap --arch=amd64 trixie /tmp/sentryos-root http://deb.debian.org/debian/
+          wget -qO debian-base.iso "https://cdimage.debian.org/cdimage/weekly-live-builds/amd64/iso-hybrid/debian-live-testing-amd64-xfce.iso"
 
-      - name: Setup Mount Point & Oprek Sistem
+      - name: Bongkar ISO & SquashFS (Fase Extract Cubic)
         run: |
-          # Mount file system penting biar apt & chroot jalan mulus tanpa error
+          sudo mkdir -p /tmp/iso_unpacked /tmp/sentryos-root
+          sudo xorriso -osirrox on -indev debian-base.iso -extract / /tmp/iso_unpacked
+          sudo unsquashfs -f -d /tmp/sentryos-root /tmp/iso_unpacked/live/filesystem.squashfs
+
+      - name: Masuk Chroot & Pasang SentryOS (Sistem Anti-Root & Auto-Login)
+        run: |
           sudo mount -t proc none /tmp/sentryos-root/proc
           sudo mount -t sysfs none /tmp/sentryos-root/sys
           sudo mount -o bind /dev /tmp/sentryos-root/dev
           sudo mount -o bind /dev/pts /tmp/sentryos-root/dev/pts
+          sudo cp /etc/resolv.conf /tmp/sentryos-root/etc/
 
-          # 1. Kunci Akun Root
-          sudo chroot /tmp/sentryos-root passwd -l root
-          
-          # 2. Hapus Sudo
-          sudo chroot /tmp/sentryos-root apt-get remove --purge sudo -y
-          
-          # 3. Buat Aturan Polkit buat APT (Bypass install paket untuk user biasa)
-          sudo mkdir -p /tmp/sentryos-root/usr/share/polkit-1/rules.d/
-          sudo bash -c 'cat <<EOF > /tmp/sentryos-root/usr/share/polkit-1/rules.d/45-allow-apt.rules
-          polkit.addRule(function(action, subject) {
-              if (action.id == "org.debian.apt.install-or-remove-packages") {
-                  return polkit.Result.YES;
-              }
-          });
-          EOF'
+          sudo chroot /tmp/sentryos-root /bin/bash -c "
+            # 1. Kunci Hostname jadi sentryos (Anti Bocor)
+            echo 'sentryos' > /etc/hostname
+            echo '127.0.0.1 localhost sentryos' > /etc/hosts
+            
+            # 2. Bersihin identitas mesin GitHub
+            rm -f /etc/machine-id
+            rm -f /var/lib/dbus/machine-id
+            dbus-uuidgen --ensure=/etc/machine-id
+            
+            # 3. Ganti identitas OS Debian
+            cat <<EOF > /etc/os-release
+            PRETTY_NAME=\"SentryOS\"
+            NAME=\"SentryOS\"
+            ID=sentryos
+            ID_LIKE=debian
+          EOF
 
-          # 4. Ganti identitas OS jadi SentryOS sepenuhnya
-          sudo bash -c 'cat <<EOF > /tmp/sentryos-root/etc/os-release
-          PRETTY_NAME="SentryOS"
-          NAME="SentryOS"
-          ID=sentryos
-          ID_LIKE=debian
-          EOF'
+            # 4. EKSEKUSI ANTI-ROOT (Kunci Root & Hapus Sudo)
+            passwd -l root
+            apt-get remove --purge sudo -y
+            
+            # 5. PAKSA AUTO-LOGIN TANPA SUDO
+            mkdir -p /etc/lightdm/lightdm.conf.d
+            cat <<EOF > /etc/lightdm/lightdm.conf.d/99-autologin.conf
+            [Seat:*]
+            autologin-user=user
+            autologin-user-timeout=0
+            user-session=xfce
+          EOF
 
-      - name: Pasang Kernel, GUI XFCE & Calamares Installer
+            # 6. BIKIN ATURAN POLKIT (Bypass APT & Installer)
+            # Karena gak ada sudo, ini nyawa biar lu tetep bisa install aplikasi & install OS ke PC
+            mkdir -p /usr/share/polkit-1/rules.d/
+            cat <<EOF > /usr/share/polkit-1/rules.d/45-sentryos-bypass.rules
+            polkit.addRule(function(action, subject) {
+                if (action.id == 'org.debian.apt.install-or-remove-packages' || 
+                    action.id == 'com.github.calamares.calamares.pkexec') {
+                    return polkit.Result.YES;
+                }
+            });
+          EOF
+
+            # 7. Install Calamares Installer
+            apt-get update
+            apt-get install -y calamares calamares-settings-debian --no-install-recommends
+          "
+
+      - name: Pasang Logo SentryOS & Branding Custom
         run: |
-          sudo chroot /tmp/sentryos-root apt-get update
-          # Memasang Kernel Linux, systemd, desktop XFCE, dan Calamares
-          sudo chroot /tmp/sentryos-root apt-get install -y linux-image-amd64 systemd-sysv xorg xfce4 lightdm calamares calamares-settings-debian live-boot --no-install-recommends
-
-      - name: Pasang Logo SentryOS & Custom Installer Calamares
-        run: |
-          # Download gambar lu dari GDrive pake URL Direct Download
           sudo curl -L -o /tmp/sentryos-root/tmp/logo.png "https://drive.google.com/uc?export=download&id=1QJ__X3bZmA5j7VQX17rit_EV1eQNAkKY"
+          sudo chroot /tmp/sentryos-root /bin/bash -c "chafa --format=symbols --size=40x /tmp/logo.png > /etc/distro-logo.txt"
           
-          # Bikin ASCII buat terminal pakai logo lu (Fixed Permission Denied bug pake sudo tee)
-          sudo chroot /tmp/sentryos-root chafa --format=symbols --size=40x /tmp/logo.png | sudo tee /tmp/sentryos-root/etc/distro-logo.txt > /dev/null
-          
-          # Bikin konfigurasi branding Calamares khusus SentryOS
           sudo mkdir -p /tmp/sentryos-root/usr/share/calamares/branding/sentryos
           sudo cp /tmp/sentryos-root/tmp/logo.png /tmp/sentryos-root/usr/share/calamares/branding/sentryos/logo.png
           
@@ -93,50 +111,32 @@ jobs:
               productWelcome: "logo.png"
           EOF'
           
-          # Timpa settingan asli Debian biar pakai branding SentryOS di installer
           sudo sed -i 's/branding: .*/branding: sentryos/g' /tmp/sentryos-root/etc/calamares/settings.conf || true
 
-      - name: Unmount System Files (Penting)
+      - name: Bersih-bersih & Unmount
         run: |
-          # Wajib di-unmount sebelum dibungkus jadi squashfs biar OS gak bengkak/error
+          sudo rm /tmp/sentryos-root/etc/resolv.conf
           sudo umount /tmp/sentryos-root/dev/pts
           sudo umount /tmp/sentryos-root/dev
           sudo umount /tmp/sentryos-root/sys
           sudo umount /tmp/sentryos-root/proc
 
-      - name: Siapkan Struktur Booting Live USB
+      - name: Bungkus Ulang OS (Fase Build Cubic)
         run: |
-          sudo mkdir -p /tmp/sentryos-iso/live
-          sudo mkdir -p /tmp/sentryos-iso/isolinux
-          
-          # Kompres OS yang udah dioprek jadi SquashFS
-          sudo mksquashfs /tmp/sentryos-root /tmp/sentryos-iso/live/filesystem.squashfs -comp gzip
-          
-          # Salin Kernel dan Initrd
-          sudo cp /tmp/sentryos-root/boot/vmlinuz-* /tmp/sentryos-iso/live/vmlinuz
-          sudo cp /tmp/sentryos-root/boot/initrd.img-* /tmp/sentryos-iso/live/initrd
-          
-          # Copy file system pembantu boot
-          sudo cp /usr/lib/ISOLINUX/isolinux.bin /tmp/sentryos-iso/isolinux/
-          sudo cp /usr/lib/syslinux/modules/bios/ldlinux.c32 /tmp/sentryos-iso/isolinux/
-          
-          # Bikin menu boot super simpel
-          sudo bash -c 'cat <<EOF > /tmp/sentryos-iso/isolinux/isolinux.cfg
-          default linux
-          label linux
-            kernel /live/vmlinuz
-            append initrd=/live/initrd boot=live quiet splash
-          EOF'
+          sudo rm /tmp/iso_unpacked/live/filesystem.squashfs
+          sudo mksquashfs /tmp/sentryos-root /tmp/iso_unpacked/live/filesystem.squashfs -comp xz
 
-      - name: Bungkus Jadi File ISO Matang SentryOS
-        run: |
+          cd /tmp/iso_unpacked
+          sudo bash -c "md5sum \$(find ! -name 'md5sum.txt' ! -path './isolinux/*' -follow -type f) > md5sum.txt"
+
           sudo xorriso -as mkisofs -r -J -joliet-long -l \
-            -b isolinux/isolinux.bin -c isolinux/boot.cat \
+            -isohybrid-mbr /usr/lib/ISOLINUX/isohdpfx.bin \
+            -c isolinux/boot.cat -b isolinux/isolinux.bin \
             -no-emul-boot -boot-load-size 4 -boot-info-table \
-            -o sentryos-1.0.iso /tmp/sentryos-iso
+            -o /tmp/sentryos-1.0.iso .
 
-      - name: Upload ISO Hasil Rakitan
+      - name: Upload ISO SentryOS
         uses: actions/upload-artifact@v4
         with:
           name: SentryOS-ISO
-          path: sentryos-1.0.iso
+          path: /tmp/sentryos-1.0.iso
