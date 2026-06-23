@@ -29,24 +29,40 @@ jobs:
           sudo mount -t tmpfs tmpfs /tmp/sentryos-root/run
           sudo cp /etc/resolv.conf /tmp/sentryos-root/etc/
 
-          # Membuat script utuh yang aman dari bug ekspansi variabel GitHub Actions
+          # Membuat script utuh yang aman dari bug chroot
           cat << 'EOF' | sudo tee /tmp/sentryos-root/install-sentryos.sh > /dev/null
           #!/bin/bash
           set -e
           export DEBIAN_FRONTEND=noninteractive
+          export DEBCONF_NONINTERACTIVE_SEEN=true
 
           # Cegah daemon/service berjalan otomatis yang sering bikin crash apt di chroot
           echo -e '#!/bin/sh\nexit 101' > /usr/sbin/policy-rc.d
           chmod +x /usr/sbin/policy-rc.d
 
-          # 0. Update Repositori untuk menyertakan firmware agar instalasi kernel sempurna
+          # 0. Persiapan Lingkungan Chroot (SANGAT KRUSIAL AGAR KERNEL TIDAK CRASH)
+          ln -sf /proc/mounts /etc/mtab
+          echo "proc /proc proc defaults 0 0" > /etc/fstab
+
+          cat <<CONF > /etc/kernel-img.conf
+          do_symlinks = yes
+          do_bootloader = no
+          do_initrd = yes
+          link_in_boot = no
+          CONF
+
+          # Update Repositori untuk menyertakan firmware agar instalasi kernel sempurna
           cat <<REPO > /etc/apt/sources.list
           deb http://deb.debian.org/debian trixie main contrib non-free non-free-firmware
           REPO
 
           apt-get update
-          apt-get install -y dbus initramfs-tools ca-certificates
+          apt-get install -y dbus initramfs-tools ca-certificates debconf-utils
 
+          # Preseed GRUB agar diam dan tidak panik mencari disk saat instalasi
+          echo "grub-pc grub-pc/install_devices empty" | debconf-set-selections
+          echo "grub-pc grub-pc/install_devices_empty boolean true" | debconf-set-selections
+          
           # 1. Kunci Identitas
           echo 'sentryos' > /etc/hostname
           echo '127.0.0.1 localhost sentryos' > /etc/hosts
@@ -61,13 +77,16 @@ jobs:
           ID_LIKE=debian
           OSREL
 
-          # 2. Pasang GUI & Kernel FULL (tambahkan firmware-linux agar initramfs tidak hang)
-          apt-get install -y linux-image-amd64 linux-headers-amd64 firmware-linux live-boot live-config live-config-systemd systemd-sysv xorg xfce4 xfce4-terminal lightdm calamares calamares-settings-debian pkexec network-manager grub-pc-bin
+          # 2. Pasang Kernel & Base System (Dipisah agar kalau ada error lebih spesifik)
+          apt-get install -y linux-image-amd64 linux-headers-amd64 firmware-linux live-boot live-config live-config-systemd systemd-sysv
+          
+          # Pasang GUI & Installer
+          apt-get install -y xorg xfce4 xfce4-terminal lightdm calamares calamares-settings-debian pkexec network-manager grub-pc grub-efi-amd64-bin
 
           # Paksa generate initramfs dengan mendeteksi versi kernel yang baru saja terinstal
           KVER=$(ls /lib/modules | grep -v "lost+found" | head -n 1)
           if [ -n "$KVER" ]; then
-              update-initramfs -c -k "$KVER"
+              update-initramfs -c -k "$KVER" || true
           fi
 
           # 3. Sistem Anti-Root
@@ -110,7 +129,7 @@ jobs:
           echo 'pkexec /usr/bin/apt-get "$@"' >> /usr/local/bin/apt-get
           chmod +x /usr/local/bin/apt-get
 
-          # 6. Bersih-bersih Sampah Ekstrem (autoremove dihilangkan agar kernel tidak berisiko tercabut)
+          # 6. Bersih-bersih Sampah Ekstrem
           /usr/bin/apt-get clean
           rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* /var/log/* /usr/share/doc/* /usr/share/man/* /usr/share/locale/*
           
@@ -192,19 +211,16 @@ jobs:
           
           sudo mksquashfs /tmp/sentryos-root /tmp/sentryos-iso/live/filesystem.squashfs -comp xz -b 1M -noappend
           
-          # Gunakan symlink absolut (-L) untuk menyalin kernel (paling akurat & tahan bug)
           if [ -f /tmp/sentryos-root/vmlinuz ] && [ -f /tmp/sentryos-root/initrd.img ]; then
             sudo cp -L /tmp/sentryos-root/vmlinuz /tmp/sentryos-iso/live/vmlinuz
             sudo cp -L /tmp/sentryos-root/initrd.img /tmp/sentryos-iso/live/initrd
           else
-            # Fallback manual jika symlink tidak ditemukan
             VMLINUZ=$(sudo find /tmp/sentryos-root/boot -maxdepth 1 -name "vmlinuz-*" -type f | head -n 1)
             INITRD=$(sudo find /tmp/sentryos-root/boot -maxdepth 1 -name "initrd.img-*" -type f | head -n 1)
             
             if [ -z "$VMLINUZ" ] || [ -z "$INITRD" ]; then
               echo "Error: Kernel atau Initrd gagal di-build! Direktori /boot kosong."
               sudo ls -la /tmp/sentryos-root/boot
-              sudo ls -la /tmp/sentryos-root/
               exit 1
             fi
             
