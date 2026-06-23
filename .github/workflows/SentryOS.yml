@@ -18,7 +18,6 @@ jobs:
       - name: Bangun Fondasi SentryOS dari Nol (Debootstrap)
         run: |
           sudo mkdir -p /tmp/sentryos-root
-          # Sedot inti Debian 13 kosongan (Cuma puluhan MB)
           sudo debootstrap --arch=amd64 trixie /tmp/sentryos-root http://deb.debian.org/debian/
 
       - name: Rakit Mesin, GUI, & Sistem Keamanan (Chroot)
@@ -30,7 +29,7 @@ jobs:
           sudo cp /etc/resolv.conf /tmp/sentryos-root/etc/
 
           sudo chroot /tmp/sentryos-root /bin/bash -c "
-            # 1. Kunci Identitas (Biar gak bocor kayak Linux GitHub)
+            # 1. Kunci Identitas
             echo 'sentryos' > /etc/hostname
             echo '127.0.0.1 localhost sentryos' > /etc/hosts
             rm -f /etc/machine-id /var/lib/dbus/machine-id
@@ -43,25 +42,16 @@ jobs:
             ID_LIKE=debian
           EOF
 
-            # 2. Pasang Otak OS, Live Config, & Desktop (Ini fix bug login)
+            # 2. Pasang GUI & Kernel FULL (Tanpa no-install-recommends biar X11 & Driver gak ilang)
             apt-get update
-            apt-get install -y linux-image-amd64 live-boot live-config live-config-systemd systemd-sysv xorg xfce4 lightdm calamares calamares-settings-debian pkexec --no-install-recommends
+            apt-get install -y linux-image-amd64 live-boot live-config live-config-systemd systemd-sysv xorg xfce4 xfce4-terminal lightdm calamares calamares-settings-debian pkexec network-manager
 
-            # 3. Sistem Anti-Root (Hapus Sudo & Kunci Root)
+            # 3. Sistem Anti-Root
             passwd -l root
             export SUDO_FORCE_REMOVE=yes
             apt-get remove --purge sudo -y
 
-            # 4. Paksa Auto-Login XFCE (Tanpa Password)
-            mkdir -p /etc/lightdm/lightdm.conf.d
-            cat <<EOF > /etc/lightdm/lightdm.conf.d/99-autologin.conf
-            [Seat:*]
-            autologin-user=user
-            autologin-user-timeout=0
-            user-session=xfce
-          EOF
-
-            # 5. Bypass Polkit buat Calamares Installer
+            # 4. Bypass Polkit buat Calamares Installer
             mkdir -p /usr/share/polkit-1/rules.d/
             cat <<EOF > /usr/share/polkit-1/rules.d/45-sentryos-bypass.rules
             polkit.addRule(function(action, subject) {
@@ -72,14 +62,15 @@ jobs:
             });
           EOF
 
-            # 6. Taruh Icon Installer di Desktop (Biar gampang nginstall ke PC)
+            # 5. Bikin Icon Install SentryOS di Desktop
             mkdir -p /etc/skel/Desktop
             cp /usr/share/applications/calamares.desktop /etc/skel/Desktop/
             chmod +x /etc/skel/Desktop/calamares.desktop
-            # Ubah nama icon biar lebih pro
             sed -i 's/Name=.*/Name=Install SentryOS/g' /etc/skel/Desktop/calamares.desktop
+            # Paksa pake pkexec biar OS anti-root lu tetep bisa nginstall
+            sed -i 's/^Exec=.*/Exec=pkexec calamares/g' /etc/skel/Desktop/calamares.desktop
 
-            # 7. Bersih-bersih Sampah Ekstrem
+            # 6. Bersih-bersih Sampah Ekstrem
             apt-get clean
             apt-get autoremove -y
             rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* /var/log/* /usr/share/doc/* /usr/share/man/* /usr/share/locale/*
@@ -132,10 +123,10 @@ jobs:
           sudo mkdir -p /tmp/sentryos-iso/live
           sudo mkdir -p /tmp/sentryos-iso/isolinux
           
-          # Kompres OS yang udah dirakit jadi SquashFS
+          # Kompres OS
           sudo mksquashfs /tmp/sentryos-root /tmp/sentryos-iso/live/filesystem.squashfs -comp xz -b 1M -noappend
           
-          # Salin Kernel dan Initrd buat sistem booting
+          # Salin Kernel dan Initrd
           sudo cp /tmp/sentryos-root/boot/vmlinuz-* /tmp/sentryos-iso/live/vmlinuz
           sudo cp /tmp/sentryos-root/boot/initrd.img-* /tmp/sentryos-iso/live/initrd
           
@@ -143,12 +134,12 @@ jobs:
           sudo cp /usr/lib/ISOLINUX/isolinux.bin /tmp/sentryos-iso/isolinux/
           sudo cp /usr/lib/syslinux/modules/bios/ldlinux.c32 /tmp/sentryos-iso/isolinux/
           
-          # Bikin menu booting USB
+          # BIKIN MENU BOOTING (Ini fix bug login, kita kasih flag skip=sudo)
           sudo bash -c 'cat <<EOF > /tmp/sentryos-iso/isolinux/isolinux.cfg
           default linux
           label linux
             kernel /live/vmlinuz
-            append initrd=/live/initrd boot=live quiet splash
+            append initrd=/live/initrd boot=live components live-config.skip=sudo quiet splash autologin
           EOF'
 
       - name: Bungkus Jadi File ISO Matang SentryOS
