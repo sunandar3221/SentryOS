@@ -20,7 +20,7 @@ jobs:
           sudo mkdir -p /tmp/sentryos-root
           sudo debootstrap --arch=amd64 trixie /tmp/sentryos-root http://deb.debian.org/debian/
 
-      - name: Rakit Mesin, GUI, & Sistem Keamanan (Chroot)
+      - name: Rakit Mesin, GUI, & Sistem Keamanan (Chroot via Script)
         run: |
           sudo mount -t proc none /tmp/sentryos-root/proc
           sudo mount -t sysfs none /tmp/sentryos-root/sys
@@ -29,86 +29,99 @@ jobs:
           sudo mount -t tmpfs tmpfs /tmp/sentryos-root/run
           sudo cp /etc/resolv.conf /tmp/sentryos-root/etc/
 
-          sudo chroot /tmp/sentryos-root /bin/bash -c "
-            set -e  # Berhenti total kalau ada error sekecil apapun
-            export DEBIAN_FRONTEND=noninteractive # Matikan semua pertanyaan interaktif
+          # Membuat script utuh yang aman dari bug ekspansi variabel GitHub Actions
+          cat << 'EOF' | sudo tee /tmp/sentryos-root/install-sentryos.sh > /dev/null
+          #!/bin/bash
+          set -e
+          export DEBIAN_FRONTEND=noninteractive
 
-            # Cegah service (daemon) berjalan di dalam chroot agar apt tidak crash
-            echo -e '#!/bin/sh\nexit 101' > /usr/sbin/policy-rc.d
-            chmod +x /usr/sbin/policy-rc.d
+          # Cegah daemon/service berjalan otomatis yang sering bikin crash apt di chroot
+          echo -e '#!/bin/sh\nexit 101' > /usr/sbin/policy-rc.d
+          chmod +x /usr/sbin/policy-rc.d
 
-            # 0. Update APT dan Install DBUS sebelum membuat UUID
-            apt-get update
-            apt-get install -y dbus initramfs-tools ca-certificates
+          # 0. Update Repositori untuk menyertakan firmware agar instalasi kernel sempurna
+          cat <<REPO > /etc/apt/sources.list
+          deb http://deb.debian.org/debian trixie main contrib non-free non-free-firmware
+          REPO
 
-            # 1. Kunci Identitas
-            echo 'sentryos' > /etc/hostname
-            echo '127.0.0.1 localhost sentryos' > /etc/hosts
-            mkdir -p /var/lib/dbus
-            rm -f /etc/machine-id /var/lib/dbus/machine-id
-            dbus-uuidgen --ensure=/etc/machine-id
-            
-            cat <<EOF > /etc/os-release
-            PRETTY_NAME=\"SentryOS\"
-            NAME=\"SentryOS\"
-            ID=sentryos
-            ID_LIKE=debian
-            EOF
+          apt-get update
+          apt-get install -y dbus initramfs-tools ca-certificates
 
-            # 2. Pasang GUI & Kernel FULL
-            apt-get install -y linux-image-amd64 live-boot live-config live-config-systemd systemd-sysv xorg xfce4 xfce4-terminal lightdm calamares calamares-settings-debian pkexec network-manager
+          # 1. Kunci Identitas
+          echo 'sentryos' > /etc/hostname
+          echo '127.0.0.1 localhost sentryos' > /etc/hosts
+          mkdir -p /var/lib/dbus
+          rm -f /etc/machine-id /var/lib/dbus/machine-id
+          dbus-uuidgen --ensure=/etc/machine-id
+          
+          cat <<OSREL > /etc/os-release
+          PRETTY_NAME="SentryOS"
+          NAME="SentryOS"
+          ID=sentryos
+          ID_LIKE=debian
+          OSREL
 
-            # Paksa sistem membuat ulang initramfs untuk dukungan live-boot
-            update-initramfs -u -k all
+          # 2. Pasang GUI & Kernel FULL (tambahkan firmware-linux agar initramfs tidak hang)
+          apt-get install -y linux-image-amd64 linux-headers-amd64 firmware-linux live-boot live-config live-config-systemd systemd-sysv xorg xfce4 xfce4-terminal lightdm calamares calamares-settings-debian pkexec network-manager grub-pc-bin
 
-            # 3. Sistem Anti-Root
-            passwd -l root
-            export SUDO_FORCE_REMOVE=yes
-            apt-get remove --purge sudo -y
+          # Paksa generate initramfs dengan mendeteksi versi kernel yang baru saja terinstal
+          KVER=$(ls /lib/modules | grep -v "lost+found" | head -n 1)
+          if [ -n "$KVER" ]; then
+              update-initramfs -c -k "$KVER"
+          fi
 
-            # 4. FIX BUG CALAMARES MINTA ROOT
-            mkdir -p /etc/polkit-1/rules.d/
-            cat <<EOF > /etc/polkit-1/rules.d/10-sentryos-calamares.rules
-            polkit.addRule(function(action, subject) {
-                if (action.id == 'com.github.calamares.calamares.pkexec') {
-                    return polkit.Result.YES;
-                }
-            });
-            EOF
+          # 3. Sistem Anti-Root
+          passwd -l root
+          export SUDO_FORCE_REMOVE=yes
+          apt-get remove --purge sudo -y
 
-            # 5. FIX BUG APT (SentryOS APT Wrapper via Polkit)
-            mkdir -p /usr/share/polkit-1/actions
-            cat <<EOF > /usr/share/polkit-1/actions/com.sentryos.apt.policy
-            <?xml version=\"1.0\" encoding=\"UTF-8\"?>
-            <!DOCTYPE policyconfig PUBLIC \"-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN\" \"http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd\">
-            <policyconfig>
-              <action id=\"com.sentryos.apt\">
-                <defaults><allow_any>yes</allow_any><allow_inactive>yes</allow_inactive><allow_active>yes</allow_active></defaults>
-                <annotate key=\"org.freedesktop.policykit.exec.path\">/usr/bin/apt</annotate>
-              </action>
-              <action id=\"com.sentryos.apt-get\">
-                <defaults><allow_any>yes</allow_any><allow_inactive>yes</allow_inactive><allow_active>yes</allow_active></defaults>
-                <annotate key=\"org.freedesktop.policykit.exec.path\">/usr/bin/apt-get</annotate>
-              </action>
-            </policyconfig>
-            EOF
+          # 4. FIX BUG CALAMARES MINTA ROOT
+          mkdir -p /etc/polkit-1/rules.d/
+          cat <<POLKIT > /etc/polkit-1/rules.d/10-sentryos-calamares.rules
+          polkit.addRule(function(action, subject) {
+              if (action.id == 'com.github.calamares.calamares.pkexec') {
+                  return polkit.Result.YES;
+              }
+          });
+          POLKIT
 
-            echo '#!/bin/bash' > /usr/local/bin/apt
-            echo 'pkexec /usr/bin/apt \"\$@\"' >> /usr/local/bin/apt
-            chmod +x /usr/local/bin/apt
+          # 5. FIX BUG APT (SentryOS APT Wrapper via Polkit)
+          mkdir -p /usr/share/polkit-1/actions
+          cat <<POLICY > /usr/share/polkit-1/actions/com.sentryos.apt.policy
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN" "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+          <policyconfig>
+            <action id="com.sentryos.apt">
+              <defaults><allow_any>yes</allow_any><allow_inactive>yes</allow_inactive><allow_active>yes</allow_active></defaults>
+              <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/apt</annotate>
+            </action>
+            <action id="com.sentryos.apt-get">
+              <defaults><allow_any>yes</allow_any><allow_inactive>yes</allow_inactive><allow_active>yes</allow_active></defaults>
+              <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/apt-get</annotate>
+            </action>
+          </policyconfig>
+          POLICY
 
-            echo '#!/bin/bash' > /usr/local/bin/apt-get
-            echo 'pkexec /usr/bin/apt-get \"\$@\"' >> /usr/local/bin/apt-get
-            chmod +x /usr/local/bin/apt-get
+          echo '#!/bin/bash' > /usr/local/bin/apt
+          echo 'pkexec /usr/bin/apt "$@"' >> /usr/local/bin/apt
+          chmod +x /usr/local/bin/apt
 
-            # 6. Bersih-bersih Sampah Ekstrem
-            /usr/bin/apt-get clean
-            /usr/bin/apt-get autoremove -y
-            rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* /var/log/* /usr/share/doc/* /usr/share/man/* /usr/share/locale/*
-            
-            # Kembalikan policy seperti semula agar service berjalan normal saat SentryOS di-boot
-            rm -f /usr/sbin/policy-rc.d
-          "
+          echo '#!/bin/bash' > /usr/local/bin/apt-get
+          echo 'pkexec /usr/bin/apt-get "$@"' >> /usr/local/bin/apt-get
+          chmod +x /usr/local/bin/apt-get
+
+          # 6. Bersih-bersih Sampah Ekstrem (autoremove dihilangkan agar kernel tidak berisiko tercabut)
+          /usr/bin/apt-get clean
+          rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* /var/log/* /usr/share/doc/* /usr/share/man/* /usr/share/locale/*
+          
+          # Kembalikan policy boot
+          rm -f /usr/sbin/policy-rc.d
+          EOF
+
+          # Eksekusi skrip dari dalam chroot dengan aman
+          sudo chmod +x /tmp/sentryos-root/install-sentryos.sh
+          sudo chroot /tmp/sentryos-root /install-sentryos.sh
+          sudo rm -f /tmp/sentryos-root/install-sentryos.sh
 
       - name: Pasang Logo & Fix Bug Branding Calamares
         run: |
@@ -179,18 +192,25 @@ jobs:
           
           sudo mksquashfs /tmp/sentryos-root /tmp/sentryos-iso/live/filesystem.squashfs -comp xz -b 1M -noappend
           
-          # Gunakan pencarian presisi untuk menghindari globbing error / banyak file
-          VMLINUZ=$(sudo find /tmp/sentryos-root/boot -maxdepth 1 -name "vmlinuz-*" -type f | head -n 1)
-          INITRD=$(sudo find /tmp/sentryos-root/boot -maxdepth 1 -name "initrd.img-*" -type f | head -n 1)
-          
-          if [ -z "$VMLINUZ" ] || [ -z "$INITRD" ]; then
-            echo "Error: Kernel atau Initrd tidak ditemukan di direktori /boot!"
-            sudo ls -la /tmp/sentryos-root/boot
-            exit 1
+          # Gunakan symlink absolut (-L) untuk menyalin kernel (paling akurat & tahan bug)
+          if [ -f /tmp/sentryos-root/vmlinuz ] && [ -f /tmp/sentryos-root/initrd.img ]; then
+            sudo cp -L /tmp/sentryos-root/vmlinuz /tmp/sentryos-iso/live/vmlinuz
+            sudo cp -L /tmp/sentryos-root/initrd.img /tmp/sentryos-iso/live/initrd
+          else
+            # Fallback manual jika symlink tidak ditemukan
+            VMLINUZ=$(sudo find /tmp/sentryos-root/boot -maxdepth 1 -name "vmlinuz-*" -type f | head -n 1)
+            INITRD=$(sudo find /tmp/sentryos-root/boot -maxdepth 1 -name "initrd.img-*" -type f | head -n 1)
+            
+            if [ -z "$VMLINUZ" ] || [ -z "$INITRD" ]; then
+              echo "Error: Kernel atau Initrd gagal di-build! Direktori /boot kosong."
+              sudo ls -la /tmp/sentryos-root/boot
+              sudo ls -la /tmp/sentryos-root/
+              exit 1
+            fi
+            
+            sudo cp "$VMLINUZ" /tmp/sentryos-iso/live/vmlinuz
+            sudo cp "$INITRD" /tmp/sentryos-iso/live/initrd
           fi
-          
-          sudo cp "$VMLINUZ" /tmp/sentryos-iso/live/vmlinuz
-          sudo cp "$INITRD" /tmp/sentryos-iso/live/initrd
           
           sudo cp /usr/lib/ISOLINUX/isolinux.bin /tmp/sentryos-iso/isolinux/
           sudo cp /usr/lib/syslinux/modules/bios/ldlinux.c32 /tmp/sentryos-iso/isolinux/
@@ -199,7 +219,7 @@ jobs:
           default linux
           label linux
             kernel /live/vmlinuz
-            append initrd=/live/initrd boot=live components live-config.skip=sudo quiet splash autologin
+            append initrd=/live/initrd boot=live components quiet splash autologin
           EOF'
 
       - name: Bungkus Jadi File ISO Matang SentryOS
