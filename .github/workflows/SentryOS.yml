@@ -40,7 +40,7 @@ jobs:
             NAME=\"SentryOS\"
             ID=sentryos
             ID_LIKE=debian
-          EOF
+            EOF
 
             # 2. Pasang GUI & Kernel FULL
             apt-get update
@@ -51,7 +51,7 @@ jobs:
             export SUDO_FORCE_REMOVE=yes
             apt-get remove --purge sudo -y
 
-            # 4. FIX BUG CALAMARES MINTA ROOT: Taruh Polkit di /etc/ biar prioritas tinggi
+            # 4. FIX BUG CALAMARES MINTA ROOT
             mkdir -p /etc/polkit-1/rules.d/
             cat <<EOF > /etc/polkit-1/rules.d/10-sentryos-calamares.rules
             polkit.addRule(function(action, subject) {
@@ -59,10 +59,9 @@ jobs:
                     return polkit.Result.YES;
                 }
             });
-          EOF
+            EOF
 
             # 5. FIX BUG APT (SentryOS APT Wrapper via Polkit)
-            # Bikin aturan khusus biar apt dan apt-get bisa dijalanin tanpa password
             mkdir -p /usr/share/polkit-1/actions
             cat <<EOF > /usr/share/polkit-1/actions/com.sentryos.apt.policy
             <?xml version=\"1.0\" encoding=\"UTF-8\"?>
@@ -77,19 +76,14 @@ jobs:
                 <annotate key=\"org.freedesktop.policykit.exec.path\">/usr/bin/apt-get</annotate>
               </action>
             </policyconfig>
-          EOF
+            EOF
 
-            # Bikin script jembatan biar pas ketik 'apt' otomatis jadi root
-            cat <<EOF > /usr/local/bin/apt
-            #!/bin/bash
-            pkexec /usr/bin/apt \"\\\$@\"
-          EOF
+            echo '#!/bin/bash' > /usr/local/bin/apt
+            echo 'pkexec /usr/bin/apt \"\$@\"' >> /usr/local/bin/apt
             chmod +x /usr/local/bin/apt
 
-            cat <<EOF > /usr/local/bin/apt-get
-            #!/bin/bash
-            pkexec /usr/bin/apt-get \"\\\$@\"
-          EOF
+            echo '#!/bin/bash' > /usr/local/bin/apt-get
+            echo 'pkexec /usr/bin/apt-get \"\$@\"' >> /usr/local/bin/apt-get
             chmod +x /usr/local/bin/apt-get
 
             # 6. Bersih-bersih Sampah Ekstrem
@@ -100,13 +94,13 @@ jobs:
 
       - name: Pasang Logo & Fix Bug Branding Calamares
         run: |
-          # Taruh logo di folder standar Linux biar bisa dibaca shortcut desktop
+          # Download Logo lu ke direktori utama system
           sudo mkdir -p /tmp/sentryos-root/usr/share/pixmaps
           sudo curl -L -o /tmp/sentryos-root/usr/share/pixmaps/sentryos-logo.png "https://drive.google.com/uc?export=download&id=1QJ__X3bZmA5j7VQX17rit_EV1eQNAkKY"
           
           chafa --format=symbols --size=40x /tmp/sentryos-root/usr/share/pixmaps/sentryos-logo.png | sudo tee /tmp/sentryos-root/etc/distro-logo.txt > /dev/null
           
-          # Konfigurasi Calamares
+          # Inject Logo & Settingan Calamares
           sudo mkdir -p /tmp/sentryos-root/usr/share/calamares/branding/sentryos
           sudo cp /tmp/sentryos-root/usr/share/pixmaps/sentryos-logo.png /tmp/sentryos-root/usr/share/calamares/branding/sentryos/logo.png
           
@@ -134,18 +128,35 @@ jobs:
           
           sudo sed -i 's/branding: .*/branding: sentryos/g' /tmp/sentryos-root/etc/calamares/settings.conf || true
           
-          # FIX BUG BRANDING NAMA APLIKASI DEBIAN & COPY KE DESKTOP
-          sudo sed -i 's/Name=.*/Name=Install SentryOS/g' /tmp/sentryos-root/usr/share/applications/calamares.desktop
-          sudo sed -i 's/Icon=.*/Icon=\/usr\/share\/pixmaps\/sentryos-logo.png/g' /tmp/sentryos-root/usr/share/applications/calamares.desktop
-          sudo sed -i 's/^Exec=.*/Exec=pkexec calamares/g' /tmp/sentryos-root/usr/share/applications/calamares.desktop
+          # =========================================================================
+          # INI FIX-NYA BRO: Daripada modif file bawaan, kita bikin shortcut sendiri!
+          # =========================================================================
           
+          # 1. Hapus shortcut bawaan Debian/Calamares biar gak tumpang tindih
+          sudo rm -f /tmp/sentryos-root/usr/share/applications/*calamares*.desktop
+          
+          # 2. Bikin shortcut "Install SentryOS" baru dari nol
+          sudo bash -c 'cat <<EOF > /tmp/sentryos-root/usr/share/applications/sentryos-installer.desktop
+          [Desktop Entry]
+          Type=Application
+          Version=1.0
+          Name=Install SentryOS
+          GenericName=System Installer
+          Comment=Install SentryOS to your machine
+          Icon=/usr/share/pixmaps/sentryos-logo.png
+          Exec=pkexec calamares
+          Terminal=false
+          Categories=Qt;System;
+          EOF'
+          
+          # 3. Copy shortcut bikinan kita ke layar Desktop XFCE
           sudo mkdir -p /tmp/sentryos-root/etc/skel/Desktop
-          sudo cp /tmp/sentryos-root/usr/share/applications/calamares.desktop /tmp/sentryos-root/etc/skel/Desktop/
-          sudo chmod +x /tmp/sentryos-root/etc/skel/Desktop/calamares.desktop
+          sudo cp /tmp/sentryos-root/usr/share/applications/sentryos-installer.desktop /tmp/sentryos-root/etc/skel/Desktop/
+          sudo chmod +x /tmp/sentryos-root/etc/skel/Desktop/sentryos-installer.desktop
 
       - name: Unmount System Files
         run: |
-          sudo rm /tmp/sentryos-root/etc/resolv.conf
+          sudo rm -f /tmp/sentryos-root/etc/resolv.conf
           sudo umount /tmp/sentryos-root/dev/pts
           sudo umount /tmp/sentryos-root/dev
           sudo umount /tmp/sentryos-root/sys
