@@ -25,7 +25,7 @@ jobs:
           sudo xorriso -osirrox on -indev debian-base.iso -extract / /tmp/iso_unpacked
           sudo unsquashfs -f -d /tmp/sentryos-root /tmp/iso_unpacked/live/filesystem.squashfs
 
-      - name: Masuk Chroot & Pasang SentryOS (Anti-Root & Bersih-bersih)
+      - name: Masuk Chroot & Pasang SentryOS (Diet Ekstrem & Anti-Root)
         run: |
           sudo mount -t proc none /tmp/sentryos-root/proc
           sudo mount -t sysfs none /tmp/sentryos-root/sys
@@ -48,11 +48,10 @@ jobs:
             ID_LIKE=debian
           EOF
 
-            # --- EKSEKUSI ANTI-ROOT (FIX BUG N但OLAK HAPUS SUDO) ---
+            # --- EKSEKUSI ANTI-ROOT ---
             passwd -l root
             export SUDO_FORCE_REMOVE=yes
             apt-get remove --purge sudo -y
-            # -------------------------------------------------------
             
             mkdir -p /etc/lightdm/lightdm.conf.d
             cat <<EOF > /etc/lightdm/lightdm.conf.d/99-autologin.conf
@@ -75,14 +74,25 @@ jobs:
             apt-get update
             apt-get install -y calamares calamares-settings-debian --no-install-recommends
 
-            # --- FASE DIET (BERSIH-BERSIH SAMPAH) ---
+            # --- FASE DIET EKSTREM (BANTAI APLIKASI GAJAH & SAMPAH) ---
+            # Hapus LibreOffice, aplikasi chat lawas, dan torrent bawaan Debian
+            apt-get purge -y libreoffice* thunderbird* transmission* hexchat* pidgin*
+            
+            # Bersihin sisa cache dari download-an apt
             apt-get clean
             apt-get autoremove -y
+            
+            # Hapus katalog server, file temp, dan log
             rm -rf /var/lib/apt/lists/*
             rm -rf /tmp/*
             rm -rf /var/tmp/*
             rm -rf /var/log/*
-            # ----------------------------------------
+            
+            # Bantai file manual & dokumentasi (hemat ratusan MB)
+            rm -rf /usr/share/doc/*
+            rm -rf /usr/share/man/*
+            rm -rf /usr/share/locale/*
+            # ---------------------------------------------------------
           "
 
       - name: Pasang Logo SentryOS & Branding Custom
@@ -118,7 +128,6 @@ jobs:
           
           sudo sed -i 's/branding: .*/branding: sentryos/g' /tmp/sentryos-root/etc/calamares/settings.conf || true
           
-          # Hapus file logo asli biar gak menuh-menuhin sistem
           sudo rm -f /tmp/sentryos-root/tmp/logo.png
 
       - name: Bersih-bersih & Unmount
@@ -133,7 +142,6 @@ jobs:
         run: |
           sudo rm /tmp/iso_unpacked/live/filesystem.squashfs
           
-          # Pake flag -b 1M biar algoritma XZ neken file jauh lebih padat
           sudo mksquashfs /tmp/sentryos-root /tmp/iso_unpacked/live/filesystem.squashfs -comp xz -b 1M -noappend
 
           cd /tmp/iso_unpacked
