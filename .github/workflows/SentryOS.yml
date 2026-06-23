@@ -1,4 +1,4 @@
-name: Build SentryOS (Cubic Style - Base Debian)
+name: Build SentryOS (Pure Debootstrap - Super Slim)
 
 on:
   workflow_dispatch:
@@ -10,22 +10,18 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Install Tools Pendukung (Sistem Cubic CLI)
+      - name: Install Tools Pendukung
         run: |
           sudo apt update
-          sudo apt install -y squashfs-tools xorriso chafa curl isolinux syslinux-common wget dbus
+          sudo apt install -y debootstrap squashfs-tools xorriso chafa curl isolinux syslinux-common dbus
 
-      - name: Download ISO Debian Asli (Base OS Trixie XFCE)
+      - name: Bangun Fondasi SentryOS dari Nol (Debootstrap)
         run: |
-          wget -qO debian-base.iso "https://cdimage.debian.org/cdimage/weekly-live-builds/amd64/iso-hybrid/debian-live-testing-amd64-xfce.iso"
+          sudo mkdir -p /tmp/sentryos-root
+          # Sedot inti Debian 13 kosongan (Cuma puluhan MB)
+          sudo debootstrap --arch=amd64 trixie /tmp/sentryos-root http://deb.debian.org/debian/
 
-      - name: Bongkar ISO & SquashFS (Fase Extract Cubic)
-        run: |
-          sudo mkdir -p /tmp/iso_unpacked /tmp/sentryos-root
-          sudo xorriso -osirrox on -indev debian-base.iso -extract / /tmp/iso_unpacked
-          sudo unsquashfs -f -d /tmp/sentryos-root /tmp/iso_unpacked/live/filesystem.squashfs
-
-      - name: Masuk Chroot & Pasang SentryOS (Diet Ekstrem & Anti-Root)
+      - name: Rakit Mesin, GUI, & Sistem Keamanan (Chroot)
         run: |
           sudo mount -t proc none /tmp/sentryos-root/proc
           sudo mount -t sysfs none /tmp/sentryos-root/sys
@@ -34,33 +30,38 @@ jobs:
           sudo cp /etc/resolv.conf /tmp/sentryos-root/etc/
 
           sudo chroot /tmp/sentryos-root /bin/bash -c "
-            # --- Identitas Distro ---
+            # 1. Kunci Identitas (Biar gak bocor kayak Linux GitHub)
             echo 'sentryos' > /etc/hostname
             echo '127.0.0.1 localhost sentryos' > /etc/hosts
             rm -f /etc/machine-id /var/lib/dbus/machine-id
             dbus-uuidgen --ensure=/etc/machine-id
+            
             cat <<EOF > /etc/os-release
             PRETTY_NAME=\"SentryOS\"
             NAME=\"SentryOS\"
             ID=sentryos
             ID_LIKE=debian
-            EOF
+          EOF
 
-            # --- EKSEKUSI ANTI-ROOT ---
+            # 2. Pasang Otak OS & Desktop (Kernel, Live-Boot, XFCE, Calamares)
+            apt-get update
+            apt-get install -y linux-image-amd64 live-boot systemd-sysv xorg xfce4 lightdm calamares calamares-settings-debian --no-install-recommends
+
+            # 3. Sistem Anti-Root (Hapus Sudo & Kunci Root)
             passwd -l root
             export SUDO_FORCE_REMOVE=yes
             apt-get remove --purge sudo -y
 
-            # Auto-login user
+            # 4. Paksa Auto-Login XFCE (Tanpa Password)
             mkdir -p /etc/lightdm/lightdm.conf.d
             cat <<EOF > /etc/lightdm/lightdm.conf.d/99-autologin.conf
             [Seat:*]
             autologin-user=user
             autologin-user-timeout=0
             user-session=xfce
-            EOF
+          EOF
 
-            # PolicyKit bypass untuk Calamares
+            # 5. Bypass Polkit buat Calamares Installer
             mkdir -p /usr/share/polkit-1/rules.d/
             cat <<EOF > /usr/share/polkit-1/rules.d/45-sentryos-bypass.rules
             polkit.addRule(function(action, subject) {
@@ -69,57 +70,15 @@ jobs:
                     return polkit.Result.YES;
                 }
             });
-            EOF
+          EOF
 
-            apt-get update
-
-            # --- FASE DIET EKSTREM (BANTAI APLIKASI GAJAH & SAMPAH) ---
-            # Hapus aplikasi besar dan tidak perlu
-            apt-get purge -y \
-                firefox-esr* \
-                libreoffice* thunderbird* transmission* hexchat* pidgin* \
-                gnome-games* gnome-2048* quadrapassel* tali* gnome-sudoku* \
-                parole* totem* \
-                orca* speech-dispatcher* \
-                cups* printer-driver* \
-                avahi-daemon* \
-                xscreensaver* \
-                ibus* ibus-* \
-                --allow-remove-essential
-
-            # Hapus sisa paket yang tidak diperlukan lagi
-            apt-get autoremove --purge -y
-
-            # Hapus seluruh locale kecuali C (hemat ~300 MB)
-            find /usr/share/locale -mindepth 1 -maxdepth 1 ! -name 'locale.alias' -exec rm -rf {} +
-
-            # Hapus dokumentasi, manual, background, ikon tambahan
-            rm -rf /usr/share/doc/*
-            rm -rf /usr/share/man/*
-            rm -rf /usr/share/backgrounds/*
-            rm -rf /usr/share/wallpapers/*
-            rm -rf /usr/share/icons/HighContrast
-            rm -rf /usr/share/icons/*-large
-            rm -rf /usr/share/icons/*-extra
-            rm -rf /usr/share/themes/HighContrast
-            rm -rf /usr/share/themes/Adwaita-dark
-
-            # Hapus header kernel yang tidak diperlukan (modul tetap disimpan)
-            apt-get purge -y linux-headers-* linux-source-* 2>/dev/null || true
-
-            # Bersihkan cache APT dan log
+            # 6. Bersih-bersih Sampah Ekstrem
             apt-get clean
-            rm -rf /var/lib/apt/lists/*
-            rm -rf /var/log/*
-            rm -rf /tmp/*
-            rm -rf /var/tmp/*
-            # ---------------------------------------------------------
-
-            # Pasang Calamares setelah diet (agar dependensi yang perlu ikut)
-            apt-get install -y calamares calamares-settings-debian --no-install-recommends
+            apt-get autoremove -y
+            rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* /var/log/* /usr/share/doc/* /usr/share/man/* /usr/share/locale/*
           "
 
-      - name: Pasang Logo SentryOS & Branding Custom
+      - name: Pasang Logo & Branding Calamares
         run: |
           sudo curl -L -o /tmp/sentryos-root/tmp/logo.png "https://drive.google.com/uc?export=download&id=1QJ__X3bZmA5j7VQX17rit_EV1eQNAkKY"
           
@@ -151,10 +110,9 @@ jobs:
           EOF'
           
           sudo sed -i 's/branding: .*/branding: sentryos/g' /tmp/sentryos-root/etc/calamares/settings.conf || true
-          
           sudo rm -f /tmp/sentryos-root/tmp/logo.png
 
-      - name: Bersih-bersih & Unmount
+      - name: Unmount System Files
         run: |
           sudo rm /tmp/sentryos-root/etc/resolv.conf
           sudo umount /tmp/sentryos-root/dev/pts
@@ -162,25 +120,39 @@ jobs:
           sudo umount /tmp/sentryos-root/sys
           sudo umount /tmp/sentryos-root/proc
 
-      - name: Bungkus Ulang OS (Fase Kompresi Super Ketat)
+      - name: Siapkan Struktur ISO (Bootloader & Kernel)
         run: |
-          sudo rm /tmp/iso_unpacked/live/filesystem.squashfs
+          sudo mkdir -p /tmp/sentryos-iso/live
+          sudo mkdir -p /tmp/sentryos-iso/isolinux
           
-          # Kompresi ultra dengan xz + filter BCJ x86 (khusus binary x86)
-          sudo mksquashfs /tmp/sentryos-root /tmp/iso_unpacked/live/filesystem.squashfs \
-            -comp xz -Xbcj x86 -b 1M -noappend
+          # Kompres OS yang udah dirakit jadi SquashFS
+          sudo mksquashfs /tmp/sentryos-root /tmp/sentryos-iso/live/filesystem.squashfs -comp xz -b 1M -noappend
+          
+          # Salin Kernel dan Initrd buat sistem booting
+          sudo cp /tmp/sentryos-root/boot/vmlinuz-* /tmp/sentryos-iso/live/vmlinuz
+          sudo cp /tmp/sentryos-root/boot/initrd.img-* /tmp/sentryos-iso/live/initrd
+          
+          # Salin file bootloader ISOLINUX
+          sudo cp /usr/lib/ISOLINUX/isolinux.bin /tmp/sentryos-iso/isolinux/
+          sudo cp /usr/lib/syslinux/modules/bios/ldlinux.c32 /tmp/sentryos-iso/isolinux/
+          
+          # Bikin menu booting USB
+          sudo bash -c 'cat <<EOF > /tmp/sentryos-iso/isolinux/isolinux.cfg
+          default linux
+          label linux
+            kernel /live/vmlinuz
+            append initrd=/live/initrd boot=live quiet splash
+          EOF'
 
-          cd /tmp/iso_unpacked
-          sudo bash -c "md5sum \$(find ! -name 'md5sum.txt' ! -path './isolinux/*' -follow -type f) > md5sum.txt"
-
+      - name: Bungkus Jadi File ISO Matang SentryOS
+        run: |
           sudo xorriso -as mkisofs -r -J -joliet-long -l \
-            -isohybrid-mbr /usr/lib/ISOLINUX/isohdpfx.bin \
-            -c isolinux/boot.cat -b isolinux/isolinux.bin \
+            -b isolinux/isolinux.bin -c isolinux/boot.cat \
             -no-emul-boot -boot-load-size 4 -boot-info-table \
-            -o /tmp/sentryos-1.0.iso .
+            -o sentryos-1.0.iso /tmp/sentryos-iso
 
-      - name: Upload ISO SentryOS
+      - name: Upload ISO Hasil Rakitan
         uses: actions/upload-artifact@v4
         with:
-          name: SentryOS-ISO
-          path: /tmp/sentryos-1.0.iso
+          name: SentryOS-Slim-ISO
+          path: sentryos-1.0.iso
