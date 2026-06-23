@@ -43,9 +43,9 @@ jobs:
             ID_LIKE=debian
           EOF
 
-            # 2. Pasang Otak OS & Desktop (Kernel, Live-Boot, XFCE, Calamares)
+            # 2. Pasang Otak OS, Live Config, & Desktop (Ini fix bug login)
             apt-get update
-            apt-get install -y linux-image-amd64 live-boot systemd-sysv xorg xfce4 lightdm calamares calamares-settings-debian --no-install-recommends
+            apt-get install -y linux-image-amd64 live-boot live-config live-config-systemd systemd-sysv xorg xfce4 lightdm calamares calamares-settings-debian pkexec --no-install-recommends
 
             # 3. Sistem Anti-Root (Hapus Sudo & Kunci Root)
             passwd -l root
@@ -72,7 +72,14 @@ jobs:
             });
           EOF
 
-            # 6. Bersih-bersih Sampah Ekstrem
+            # 6. Taruh Icon Installer di Desktop (Biar gampang nginstall ke PC)
+            mkdir -p /etc/skel/Desktop
+            cp /usr/share/applications/calamares.desktop /etc/skel/Desktop/
+            chmod +x /etc/skel/Desktop/calamares.desktop
+            # Ubah nama icon biar lebih pro
+            sed -i 's/Name=.*/Name=Install SentryOS/g' /etc/skel/Desktop/calamares.desktop
+
+            # 7. Bersih-bersih Sampah Ekstrem
             apt-get clean
             apt-get autoremove -y
             rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* /var/log/* /usr/share/doc/* /usr/share/man/* /usr/share/locale/*
