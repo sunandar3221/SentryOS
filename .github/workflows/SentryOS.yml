@@ -32,6 +32,10 @@ jobs:
             set -e  # Berhenti total kalau ada error sekecil apapun
             export DEBIAN_FRONTEND=noninteractive # Matikan semua pertanyaan interaktif
 
+            # 0. Update APT dan Install DBUS sebelum membuat UUID
+            apt-get update
+            apt-get install -y dbus
+
             # 1. Kunci Identitas
             echo 'sentryos' > /etc/hostname
             echo '127.0.0.1 localhost sentryos' > /etc/hosts
@@ -45,8 +49,7 @@ jobs:
             ID_LIKE=debian
             EOF
 
-            # 2. Pasang GUI & Kernel FULL (Sekarang dijamin mulus karena noninteractive)
-            apt-get update
+            # 2. Pasang GUI & Kernel FULL
             apt-get install -y linux-image-amd64 live-boot live-config live-config-systemd systemd-sysv xorg xfce4 xfce4-terminal lightdm calamares calamares-settings-debian pkexec network-manager
 
             # 3. Sistem Anti-Root
@@ -89,7 +92,7 @@ jobs:
             echo 'pkexec /usr/bin/apt-get \"\$@\"' >> /usr/local/bin/apt-get
             chmod +x /usr/local/bin/apt-get
 
-            # 6. Bersih-bersih Sampah Ekstrem (Pakai absolute path biar script kita gak error di dalam robot GitHub)
+            # 6. Bersih-bersih Sampah Ekstrem
             /usr/bin/apt-get clean
             /usr/bin/apt-get autoremove -y
             rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* /var/log/* /usr/share/doc/* /usr/share/man/* /usr/share/locale/*
