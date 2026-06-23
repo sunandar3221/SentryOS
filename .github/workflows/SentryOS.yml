@@ -29,18 +29,16 @@ jobs:
           sudo mount -t tmpfs tmpfs /tmp/sentryos-root/run
           sudo cp /etc/resolv.conf /tmp/sentryos-root/etc/
 
-          # Membuat script utuh yang aman dari bug chroot
           cat << 'EOF' | sudo tee /tmp/sentryos-root/install-sentryos.sh > /dev/null
           #!/bin/bash
           set -e
           export DEBIAN_FRONTEND=noninteractive
           export DEBCONF_NONINTERACTIVE_SEEN=true
 
-          # Cegah daemon/service berjalan otomatis yang sering bikin crash apt di chroot
           echo -e '#!/bin/sh\nexit 101' > /usr/sbin/policy-rc.d
           chmod +x /usr/sbin/policy-rc.d
 
-          # 0. Persiapan Lingkungan Chroot (SANGAT KRUSIAL AGAR KERNEL TIDAK CRASH)
+          # 0. Persiapan Lingkungan Chroot
           ln -sf /proc/mounts /etc/mtab
           echo "proc /proc proc defaults 0 0" > /etc/fstab
 
@@ -51,7 +49,6 @@ jobs:
           link_in_boot = no
           CONF
 
-          # Update Repositori untuk menyertakan firmware agar instalasi kernel sempurna
           cat <<REPO > /etc/apt/sources.list
           deb http://deb.debian.org/debian trixie main contrib non-free non-free-firmware
           REPO
@@ -59,7 +56,6 @@ jobs:
           apt-get update
           apt-get install -y dbus initramfs-tools ca-certificates debconf-utils
 
-          # Preseed GRUB agar diam dan tidak panik mencari disk saat instalasi
           echo "grub-pc grub-pc/install_devices empty" | debconf-set-selections
           echo "grub-pc grub-pc/install_devices_empty boolean true" | debconf-set-selections
           
@@ -77,13 +73,12 @@ jobs:
           ID_LIKE=debian
           OSREL
 
-          # 2. Pasang Kernel & Base System (Dipisah agar kalau ada error lebih spesifik)
+          # 2. Pasang Kernel & Base System
           apt-get install -y linux-image-amd64 linux-headers-amd64 firmware-linux live-boot live-config live-config-systemd systemd-sysv
           
           # Pasang GUI & Installer
           apt-get install -y xorg xfce4 xfce4-terminal lightdm calamares calamares-settings-debian pkexec network-manager grub-pc grub-efi-amd64-bin
 
-          # Paksa generate initramfs dengan mendeteksi versi kernel yang baru saja terinstal
           KVER=$(ls /lib/modules | grep -v "lost+found" | head -n 1)
           if [ -n "$KVER" ]; then
               update-initramfs -c -k "$KVER" || true
@@ -94,15 +89,44 @@ jobs:
           export SUDO_FORCE_REMOVE=yes
           apt-get remove --purge sudo -y
 
-          # 4. FIX BUG CALAMARES MINTA ROOT
+          # 4. FIX BUG CALAMARES MINTA ROOT (VERSI ABSOLUT)
           mkdir -p /etc/polkit-1/rules.d/
           cat <<POLKIT > /etc/polkit-1/rules.d/10-sentryos-calamares.rules
           polkit.addRule(function(action, subject) {
-              if (action.id == 'com.github.calamares.calamares.pkexec') {
+              if (action.id == 'com.github.calamares.calamares.pkexec' ||
+                  action.id == 'com.github.calamares.calamares' ||
+                  (action.id == 'org.freedesktop.policykit.exec' && 
+                  (action.lookup('program') == '/usr/bin/calamares' || action.lookup('program') == '/usr/sbin/calamares'))) {
                   return polkit.Result.YES;
               }
           });
           POLKIT
+
+          mkdir -p /usr/share/polkit-1/actions
+          cat <<POLICY2 > /usr/share/polkit-1/actions/com.sentryos.calamares.policy
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN" "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+          <policyconfig>
+            <action id="com.sentryos.calamares.sbin">
+              <defaults><allow_any>yes</allow_any><allow_inactive>yes</allow_inactive><allow_active>yes</allow_active></defaults>
+              <annotate key="org.freedesktop.policykit.exec.path">/usr/sbin/calamares</annotate>
+              <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
+            </action>
+            <action id="com.sentryos.calamares.bin">
+              <defaults><allow_any>yes</allow_any><allow_inactive>yes</allow_inactive><allow_active>yes</allow_active></defaults>
+              <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/calamares</annotate>
+              <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
+            </action>
+          </policyconfig>
+          POLICY2
+
+          echo '#!/bin/bash' > /usr/local/bin/install-sentryos
+          echo 'if [ -f /usr/sbin/calamares ]; then' >> /usr/local/bin/install-sentryos
+          echo '  pkexec /usr/sbin/calamares' >> /usr/local/bin/install-sentryos
+          echo 'elif [ -f /usr/bin/calamares ]; then' >> /usr/local/bin/install-sentryos
+          echo '  pkexec /usr/bin/calamares' >> /usr/local/bin/install-sentryos
+          echo 'fi' >> /usr/local/bin/install-sentryos
+          chmod +x /usr/local/bin/install-sentryos
 
           # 5. FIX BUG APT (SentryOS APT Wrapper via Polkit)
           mkdir -p /usr/share/polkit-1/actions
@@ -133,11 +157,9 @@ jobs:
           /usr/bin/apt-get clean
           rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* /var/log/* /usr/share/doc/* /usr/share/man/* /usr/share/locale/*
           
-          # Kembalikan policy boot
           rm -f /usr/sbin/policy-rc.d
           EOF
 
-          # Eksekusi skrip dari dalam chroot dengan aman
           sudo chmod +x /tmp/sentryos-root/install-sentryos.sh
           sudo chroot /tmp/sentryos-root /install-sentryos.sh
           sudo rm -f /tmp/sentryos-root/install-sentryos.sh
@@ -178,6 +200,7 @@ jobs:
           
           sudo rm -f /tmp/sentryos-root/usr/share/applications/*calamares*.desktop
           
+          # Gunakan Wrapper Installer SentryOS di Desktop Shortcut
           sudo bash -c 'cat <<EOF > /tmp/sentryos-root/usr/share/applications/sentryos-installer.desktop
           [Desktop Entry]
           Type=Application
@@ -186,7 +209,7 @@ jobs:
           GenericName=System Installer
           Comment=Install SentryOS to your machine
           Icon=/usr/share/pixmaps/sentryos-logo.png
-          Exec=pkexec calamares
+          Exec=install-sentryos
           Terminal=false
           Categories=Qt;System;
           EOF'
